@@ -1,0 +1,115 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: DynamoDb table template with write autoscaling
+
+Parameters:
+  Environment:
+    Description: What environment should be created?
+    Type: String
+    AllowedValues:
+    - review
+    - staging
+    - production
+  ReadCapacityUnits:
+    Description: With how many read capacity units should the dynamodb table be provisioned?
+    Type: Number
+  WriteCapacityUnits:
+    Description: With how many write capacity units should the dynamodb table be provisioned?
+    Type: Number
+  EnableDynamoDbAutoscaling:
+    Description: Should Autoscaling be enabled?
+    Type: String
+    AllowedValues:
+    - yes
+    - no
+
+Mappings:
+  DynamoDbTableMap:
+    review:
+      tableName: my_table_review
+    staging:
+      tableName: my_table_staging
+    production:
+      tableName: my_table
+
+Conditions:
+  EnableAutoscaling: !Equals [ !Ref EnableDynamoDbAutoscaling, true ]
+
+Resources:
+  DynamoDbTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !FindInMap [DynamoDbTableMap, !Ref Environment, "tableName"]
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: !Ref ReadCapacityUnits
+        WriteCapacityUnits: !Ref WriteCapacityUnits
+
+  WriteCapacityScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Condition: EnableAutoscaling
+    Properties:
+      MaxCapacity: 2
+      MinCapacity: 1
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref DynamoDbTable
+      RoleARN: !GetAtt DynamoDbScalingRole.Arn
+      ScalableDimension: dynamodb:table:WriteCapacityUnits
+      ServiceNamespace: dynamodb
+
+  DynamoDbScalingRole:
+    Type: AWS::IAM::Role
+    Condition: EnableAutoscaling
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - application-autoscaling.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:DescribeTable
+                  - dynamodb:UpdateTable
+                  - cloudwatch:PutMetricAlarm
+                  - cloudwatch:DescribeAlarms
+                  - cloudwatch:GetMetricStatistics
+                  - cloudwatch:SetAlarmState
+                  - cloudwatch:DeleteAlarms
+                Resource: "*"
+
+  WriteScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Condition: EnableAutoscaling
+    Properties:
+      PolicyName: WriteAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref WriteCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 50.0
+        ScaleInCooldown: 60
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBWriteCapacityUtilization
+
+Outputs:
+  DynamoDbTableArn:
+    Value: !GetAtt DynamoDbTable.Arn
+    Export:
+      Name:
+        Fn::Sub: ${AWS::StackName}-DynamoDbTable
