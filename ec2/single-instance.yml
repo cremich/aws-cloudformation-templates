@@ -42,6 +42,9 @@ Resources:
   Instance:
     Type: AWS::EC2::Instance
     Properties:
+      Tags:
+        - Key: Name
+          Value: myCfnInstance
       InstanceType: !Ref InstanceType
       SecurityGroupIds:
       - !Ref InstanceSecurityGroup
